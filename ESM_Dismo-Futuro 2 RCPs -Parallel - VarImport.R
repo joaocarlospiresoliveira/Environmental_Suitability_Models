@@ -479,6 +479,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               pattern = ".bil$",
               full.names = TRUE
             )
+          bio70_MI_85 <- terra::rast(bio70_MI_85)
           names(bio70_MI_85) <-
             c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
           names(bio70_MI_85)
