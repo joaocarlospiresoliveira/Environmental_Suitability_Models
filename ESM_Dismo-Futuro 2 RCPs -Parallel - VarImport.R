@@ -13,6 +13,7 @@
 ## 2 - Planilha de ocorrências deve conter apenas 3 colunas (sp, lon, lat)
 ## 3 - Coloque a palilha com as ocorrências nomaeda como 'spp.csv' na WD
 
+options(java.parameters = c("-XX:+UseConcMarkSweepGC", "-Xmx8192m"))
 
 ## Install and Library packages ####
 # install.packages("rgdal")
