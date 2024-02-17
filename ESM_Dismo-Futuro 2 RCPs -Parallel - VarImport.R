@@ -13,7 +13,6 @@
 ## 2 - Planilha de ocorrências deve conter apenas 3 colunas (sp, lon, lat)
 ## 3 - Coloque a palilha com as ocorrências nomaeda como 'spp.csv' na WD
 
-options(java.parameters = c("-XX:+UseConcMarkSweepGC", "-Xmx8192m"))
 
 ## Install and Library packages ####
 # install.packages("rgdal")
@@ -329,7 +328,7 @@ rasterOptions(tmpdir = raster_tmp_dir)
 
 ## Occurrences ####
 # Select you species data matrix # 
-spp <- read.csv("./spp.csv", header = T)  
+spp <- read.csv("./Araucaria-ok.csv", header = T)  
 
 # plot all your occurence points #
 # plot(bio.crop[[1]]) 
@@ -396,7 +395,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           
           bio.crop<-
             list.files(
-              "./vars/Present/PCA",  pattern = ".bil$",
+              "./vars/Present/PCA",  pattern = ".grd$",
               full.names = TRUE
             )
           bio.crop <- terra::rast(bio.crop) # para rodar somente com dados de clima substituir "bio.crop" por "bio.crop[-c(7,8)]"
@@ -410,8 +409,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           
           bio70_CA_45 <-
             list.files(
-              "./vars/Future/RCP45/CanESM5/ssp245/PCA",
-              pattern = ".bil$",
+              "./vars/Future/CanESM5/ssp245/PCA",
+              pattern = ".grd$",
               full.names = TRUE
             )
           bio70_CA_45 <- terra::rast(bio70_CA_45)
@@ -423,8 +422,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 2: CNRM-CM6-1
           bio70_CN_45 <-
             list.files(
-              "./vars/Future/RCP45/CNRM-CM6-1/ssp245/PCA",
-              pattern = ".bil$",
+              "./vars/Future/CNRM-CM6-1/ssp245/PCA",
+              pattern = ".grd$",
               full.names = TRUE
             )
           bio70_CN_45 <- terra::rast(bio70_CN_45)
@@ -436,8 +435,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           
           bio70_MI_45 <-
             list.files(
-              "./vars/Future/RCP45/MIROC-ES2L/ssp245/PCA",
-              pattern = ".bil$",
+              "./vars/Future/MIROC-ES2L/ssp245/PCA",
+              pattern = ".grd$",
               full.names = TRUE
             )
           bio70_MI_45 <- terra::rast(bio70_MI_45)
@@ -451,8 +450,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 1: CanESM5
           bio70_CA_85 <-
             list.files(
-              "./vars/Future/RCP85/CanESM5/ssp585/PCA",
-              pattern = ".bil$",
+              "./vars/Future/CanESM5/ssp585/PCA",
+              pattern = ".grd$",
               full.names = TRUE
             )
           bio70_CA_85 <- terra::rast(bio70_CA_85)
@@ -464,8 +463,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 2: CNRM-CM6-1
           bio70_CN_85 <-
             list.files(
-              "./vars/Future/RCP85/CNRM-CM6-1/ssp585/PCA",
-              pattern = ".bil$",
+              "./vars/Future/CNRM-CM6-1/ssp585/PCA",
+              pattern = ".grd$",
               full.names = TRUE
             )
           bio70_CN_85 <- terra::rast(bio70_CN_85)
@@ -476,8 +475,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 3: MIROC-ES2L
           bio70_MI_85 <-
             list.files(
-              "./vars/Future/RCP85/MIROC-ES2L/ssp585/PCA",
-              pattern = ".bil$",
+              "./vars/Future/MIROC-ES2L/ssp585/PCA",
+              pattern = ".grd$",
               full.names = TRUE
             )
           bio70_MI_85 <- terra::rast(bio70_MI_85)
@@ -534,6 +533,11 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ocor <-
             ocor.val[id == F, c("lon", "lat")] # Removing duplicate points
           
+          # Salvando matriz com pontos espacialmente unicos #
+          
+          unique_points <- data.frame(sp = especie, ocor)
+          write.csv(unique_points, paste0(especie, "_spatial_uniqe.csv"),
+                    row.names = F)
           #------------------------------------------#
           #           SELECT PAs                  ###
           #----------------------------------------#
