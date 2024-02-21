@@ -1,10 +1,20 @@
-
 ###################### Acknowledgments ##########################
 ### Dr. Matheus de Souza Lima-Ribeiro's team of Universidade Federal de Jataí.
-### Dr. Diogo Souza Bezerra Rocha (Botanical Garden Research Institute / RJ).
-### MSc. João Carlos Pires de Oliveira (PhD candidate)
+### Dr. Diogo Souza Bezerra Rocha (International Institute for Sustainability).
+### Dr. João Carlos Pires de Oliveira
 
-## Install and Loading packages ####
+############################## ATENÇÃO #########################################
+# Antes de modelar coloque dentro da pasta de trabalho (work directory - WD) uma 
+# pasta com nome 'vars'. a pasta 'vars', deve ter as pastas 'Presente' e 'Future'.
+###--------------------------------------------------------------------------###
+
+############################# CHECAGEM ########################################
+## 1 - Verificar se a pastar 'vars' e suas subpastas estão na Work Directory - WD
+## 2 - Planilha de ocorrências deve conter apenas 3 colunas (sp, lon, lat)
+## 3 - Coloque a palilha com as ocorrências nomaeda como 'spp.csv' na WD
+
+
+## Install and Library packages ####
 # install.packages("rgdal")
 # install.packages("sp")
 # install.packages("raster")
@@ -22,14 +32,12 @@
 # install.packages("nnet")
 # install.packages("beepr")
 # install.packages("doParallel")
-# install.packages("biomod2")
 # install.packages("sdmvspecies")
 # install.packages("filesstrings")
 # install.packages("dplyr")
+# install.packages("mda")
+library(terra)
 library(sp)
-library(rgdal)
-library(tcltk2)
-library(raster)
 library(maps)
 library(psych)
 library(vegan)
@@ -43,7 +51,6 @@ library(mgcv)
 library(nnet)
 library(beepr)
 library(doParallel)
-library(biomod2)
 library(sdmvspecies)
 library(filesstrings)
 library(dplyr)
@@ -52,7 +59,7 @@ library(mda)
 if (dir.exists("outputs") == F) {
   dir.create("outputs")
 }
-
+# Carregando funcoes necessarias #
 # Function to predict future predictions ###
 preFut = function(rast, rast1 = NULL, model, GCM =  NULL) {
   if(missing(GCM)){
@@ -60,8 +67,8 @@ preFut = function(rast, rast1 = NULL, model, GCM =  NULL) {
   }else{GCM = GCM}
   pre = foreach::foreach(
     gcm = 1:length(GCM),
-    .combine = stack,
-    .packages = c("raster","biomod2", 'sp', "kernlab","dismo",
+    .combine = c,
+    .packages = c("terra", 'sp', "kernlab","dismo",
                   "stats","randomForest", "nnet", "earth" )
   ) %do% {
     predict.enfa <-function (object.enfa,baseline.climate,new.climate,nf = 2,...) {
@@ -79,71 +86,131 @@ preFut = function(rast, rast1 = NULL, model, GCM =  NULL) {
         Zli <-
           new.climate.scale %*% as.matrix(object.enfa$co)}
       maha <- mahalanobis(Zli, center = m, cov = cov)
-      map <-rasterize(data.frame(new.climate@coords),rast[[1]],maha) * -1
+      map <-rasterize(as.matrix(new.climate@coords),rast[[1]],maha) * -1
       return(invisible(map))
     }
     if (!"madifa" %in% class(model)) {
-      raster::predict(rast[gcm][[1]], model)
+      terra::predict(rast[gcm][[1]], model, na.rm = T)
     } else if ("madifa" %in% class(model) && "list" %in% class(rast1)) {
       climaPres.spdf = na.omit(data.frame(xyFromCell(rast, 1:ncell(rast)),
-                                          raster::values(rast)))
+                                          terra::values(rast)))
       climaFut.spdf = na.omit(data.frame(xyFromCell(rast1[gcm][[1]], 
                                                     1:ncell(rast1[gcm][[1]])),
-                                         raster::values(rast1[gcm][[1]])))
+                                         terra::values(rast1[gcm][[1]])))
       suppressWarnings(gridded(climaPres.spdf) <-~ x + y)
       suppressWarnings(gridded(climaFut.spdf) <- ~ x + y)
       predict.enfa( object.enfa = model,baseline.climate =climaPres.spdf,
                     new.climate = climaFut.spdf)}else{
                       climaPres.spdf = na.omit(data.frame(xyFromCell(rast, 1:ncell(rast)),
-                                                          raster::values(rast)))
+                                                          terra::values(rast)))
                       climaFut.spdf = na.omit(data.frame(xyFromCell(rast1, 
                                                                     1:ncell(rast1)),
-                                                         raster::values(rast1)))
+                                                         terra::values(rast1)))
                       suppressWarnings(gridded(climaPres.spdf) <-~ x + y)
                       suppressWarnings(gridded(climaFut.spdf) <- ~ x + y)
                       predict.enfa( object.enfa = model,baseline.climate =climaPres.spdf,
                                     new.climate = climaFut.spdf)}
   }
   pre = mean(pre)
+  names(pre) = c("lyr1")
   return(pre)
   rm(new.climate.scale,maha,map,climaPres.spdf,climaFut.spdf)
   gc(reset = T, full = T)
 }
 
 # Function to scale maps -- DON'T CHANGE####
-rescMod.One =  function(raster.layer) {
-  if (!(class(raster.layer) %in% "RasterLayer")) {
-    stop("raster.layer is not a RasterLayer objectect!")
+eval.All.Model <- function(rast, dismoTestPrepared, tr ) {
+  p = terra::extract(rast, dismoTestPrepared[dismoTestPrepared[, 3] == 1, 1:2 ], ID = F)
+  a = terra::extract(rast, dismoTestPrepared[dismoTestPrepared[, 3] == 0, 1:2 ], ID = F)
+  p <- stats::na.omit(p[[1]])
+  a <- stats::na.omit(a[[1]])
+  np <- length(p)
+  na <- length(a)
+  if (na == 0 | np == 0) {
+    stop('cannot evaluate a model without absence and presence data that are not NA')
   }
-  min.value <- cellStats(raster.layer, min)
-  if (min.value < 0) {
-    raster.layer <- raster.layer + (0-min.value)
-    max.value <- cellStats(raster.layer, max)
-    raster.layer <- raster.layer/max.value
-    return(raster.layer)
-  } else {
-    max.value <- cellStats(raster.layer, max)
-    raster.layer <- raster.layer/max.value
-    return(raster.layer)
+  if (missing(tr)) {
+    if (length(p) > 1000) {
+      tr <- as.vector(quantile(p, 0:1000/1000))
+    }
+    else {
+      tr <- p
+    }
+    if (length(a) > 1000) {
+      tr <- c(tr, as.vector(quantile(a, 0:1000/1000)))
+    }
+    else {
+      tr <- c(tr, a)
+    }
+    tr <- sort(unique(round(tr, 8)))
+    tr <- c(tr - 1e-04, tr[length(tr)] + c(0, 1e-04))
   }
-}
+  else {
+    tr <- sort(as.vector(tr))
+  }
+  N <- na + np
+  xc <- new('ModelEvaluation')
+  xc@presence = p
+  xc@absence = a
+  R <- sum(rank(c(p, a))[1:np]) - (np * (np + 1)/2)
+  xc@auc <- R / (as.numeric(na) * as.numeric(np))
+  cr <- try( cor.test(c(p,a), c(rep(1, length(p)), rep(0, length(a))) ), silent=TRUE )
+  if (class(cr) != 'try-error') {
+    xc@cor <- cr$estimate
+    xc@pcor <- cr$p.value}
+  res <- matrix(ncol=4, nrow=length(tr))
+  colnames(res) <- c('tp', 'fp', 'fn', 'tn')
+  xc@t <- tr
+  for (i in 1:length(tr)) {
+    res[i,1] <- length(p[p>=tr[i]])  # a  true positives
+    res[i,2] <- length(a[a>=tr[i]])  # b  false positives
+    res[i,3] <- length(p[p<tr[i]])    # c  false negatives
+    res[i,4] <- length(a[a<tr[i]])}    # d  true negatives
+  xc@confusion = res
+  a = res[,1]
+  b = res[,2]
+  c = res[,3]
+  d = res[,4]
+  # after Fielding and Bell	
+  xc@np <- as.integer(np)
+  xc@na <- as.integer(na)
+  xc@prevalence = (a + c) / N
+  xc@ODP = (b + d) / N
+  xc@CCR = (a + d) / N
+  xc@TPR = a / (a + c)
+  xc@TNR = d / (b + d)
+  xc@FPR = b / (b + d)
+  xc@FNR = c/(a + c)
+  xc@PPP = a/(a + b)
+  xc@NPP = d/(c + d)
+  xc@MCR = (b + c)/N
+  xc@OR = (a*d)/(c*b)
+  prA = (a+d)/N
+  prY = (a+b)/N * (a+c)/N
+  prN = (c+d)/N * (b+d)/N
+  prE = prY + prN
+  xc@kappa = (prA - prE) / (1-prE)
+  return(xc)}
+
 
 # Function to scale maps -- DON'T CHANGE###
 rescMod = function(ras1, ras2, ras3){
-  p1 <- rasterToPoints(stack(ras1))
-  p2 <- rasterToPoints(stack(ras2))
-  p3 <- rasterToPoints(stack(ras3))
-  coord <- rasterToPoints(ras1)[, 1:2]
+  names(ras1) = names(ras2) = names(ras3) = c("lyr1")
+  p1 <- terra::as.data.frame(ras1)
+  p2 <- terra::as.data.frame(ras2)
+  p3 <- terra::as.data.frame(ras3)
+  coord <- terra::as.data.frame(ras1, xy = T)[, 1:2]
   id <- rep(c("cur", "fut.45", "fut.85"), each = nrow(p1))
   rd = rbind(p1, p2, p3)
-  st = vegan::decostand(x = rd[,3], method = "range", MARGIN = 2)
-  ens = data.frame(coord, Cur = st[id == "cur"], 
-                   Fut.45 = st[id =="fut.45"],
-                   Fut.85 = st[id =="fut.85"])
-  ens.cur = raster::rasterize(ens[,c("x","y")],ras1[[1]], ens[,"Cur"])
-  ens.fut.45 = raster::rasterize(ens[,c("x","y")],ras1[[1]], ens[,"Fut.45"])
-  ens.fut.85 = raster::rasterize(ens[,c("x","y")],ras1[[1]], ens[,"Fut.85"])
-  resul = stack(ens.cur, ens.fut.45, ens.fut.85)
+  st = vegan::decostand(x = rd[,1], method = "range", MARGIN = 2)
+  ens = as.matrix(data.frame(coord, Cur = st[id == "cur"], 
+                             Fut.45 = st[id =="fut.45"],
+                             Fut.85 = st[id =="fut.85"]))
+  ens.cur = terra::rasterize(ens[,c("x","y")],ras1[[1]], ens[,"Cur"])
+  ens.fut.45 = terra::rasterize(ens[,c("x","y")],ras1[[1]], ens[,"Fut.45"])
+  ens.fut.85 = terra::rasterize(ens[,c("x","y")],ras1[[1]], ens[,"Fut.85"])
+  resul = c(ens.cur, ens.fut.45, ens.fut.85)
+  names(resul)<- c("Cur", "Fut.45", "Fut.85")
   return(resul)
   rm(p1,p2,p3,coord,id,rd,st,ens,ens.fut.45, ens.fut.85)
   gc(reset = T)
@@ -151,33 +218,40 @@ rescMod = function(ras1, ras2, ras3){
 
 # Function to Evaluate All Models --- DON'T CHANGE  ####
 
-eval.All.Model <- function(rast, dismoTestPrepared, tr ) {{
-  p = raster::extract(rast, dismoTestPrepared[dismoTestPrepared[, 3] == 1, 1:2 ])
-  a = raster::extract(rast, dismoTestPrepared[dismoTestPrepared[, 3] == 0, 1:2 ])}
-  p <- stats::na.omit(p)
-  a <- stats::na.omit(a)
+eval.All.Model <- function(rast, dismoTestPrepared, tr ) {
+  p = terra::extract(rast, dismoTestPrepared[dismoTestPrepared[, 3] == 1, 1:2 ], ID = F)
+  a = terra::extract(rast, dismoTestPrepared[dismoTestPrepared[, 3] == 0, 1:2 ], ID = F)
+  p <- stats::na.omit(p[[1]])
+  a <- stats::na.omit(a[[1]])
   np <- length(p)
   na <- length(a)
   if (na == 0 | np == 0) {
-    stop('cannot evaluate a model without absence and presence data that are not NA')}
+    stop('cannot evaluate a model without absence and presence data that are not NA')
+  }
   if (missing(tr)) {
     if (length(p) > 1000) {
       tr <- as.vector(quantile(p, 0:1000/1000))
-    } else {
-      tr <- p}
+    }
+    else {
+      tr <- p
+    }
     if (length(a) > 1000) {
       tr <- c(tr, as.vector(quantile(a, 0:1000/1000)))
-    } else {
-      tr <- c(tr, a)}
-    tr <- sort(unique( round(tr, 8)))
-    tr <- c( tr - 0.0001, tr[length(tr)] + c(0, 0.0001))
-  } else {
-    tr <- sort(as.vector(tr))}
+    }
+    else {
+      tr <- c(tr, a)
+    }
+    tr <- sort(unique(round(tr, 8)))
+    tr <- c(tr - 1e-04, tr[length(tr)] + c(0, 1e-04))
+  }
+  else {
+    tr <- sort(as.vector(tr))
+  }
   N <- na + np
   xc <- new('ModelEvaluation')
   xc@presence = p
   xc@absence = a
-  R <- sum(rank(c(p, a))[1:np]) - (np*(np+1)/2)
+  R <- sum(rank(c(p, a))[1:np]) - (np * (np + 1)/2)
   xc@auc <- R / (as.numeric(na) * as.numeric(np))
   cr <- try( cor.test(c(p,a), c(rep(1, length(p)), rep(0, length(a))) ), silent=TRUE )
   if (class(cr) != 'try-error') {
@@ -225,17 +299,17 @@ quiet <- function(x) {
 
 ### Whenever necessary:
 # Parallel processing #
-detectCores()
-getDoParWorkers()
-cl <-
+detectCores() # Identifica o numero de nucleos do processador
+getDoParWorkers() # mostra quantos nucleos o R esta utilizando
+cl <- # seleciona X nucleos do processador
   parallel::makeCluster(5, outfile = paste0("./outputs/", "log_models.log"))
 #cl <- parallel::makeCluster(10, type = "MPI", outfile = "./outputs/joao.log")
-registerDoParallel(cl)
+registerDoParallel(cl) # registra o paralelismo
 getDoParWorkers()
 
-# Increased memory allocation
-memory.limit(17592186044415) # or some other memory value (in kB)
-# memory.limit(8062000000000) # or some other memory value (in kB)
+# # Increased memory allocation
+# memory.limit(17592186044415) # or some other memory value (in kB)
+# # memory.limit(8062000000000) # or some other memory value (in kB)
 
 
 ## CHANGE raster TEMPORARY FILE DIRECTORY
@@ -252,167 +326,21 @@ if (dir.exists("raster_tmp") == F) {
 rasterOptions(tmpdir = raster_tmp_dir)
 
 
-##### Loading variaveis ####
-
-bio.crop<-
-  list.files(
-    "./Present/PCA",  pattern = ".bil$",
-    full.names = TRUE
-  )
-bio.crop
-bio.crop <- raster::stack(bio.crop)
-# bio.crop <- disaggregate(bio.crop, fact = 5, fun = mean)
-# bio.crop <- aggregate(bio.crop, fact = 5, fun = mean)
-names(bio.crop)<- c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
-names(bio.crop)
-
-#--------------------------------------------------#
-#      LOADING FUTURE VARIABLES                ####
-#------------------------------------------------#
-###GCM 1: CanESM5
-
-bio70_CA_45 <-
-  list.files(
-    "./Future/RCP45/CanESM5/ssp245/PCA",
-    pattern = ".bil$",
-    full.names = TRUE
-  )
-bio70_CA_45
-bio70_CA_45 <- raster::stack(bio70_CA_45)
-# bio70_CA_45 <-disaggregate(bio70_CA_45, fact=5, fun=mean)
-# bio70_CA_45 <-aggregate(bio70_CA_45, fact=5, fun=mean)
-# bio70_CA_45<-rescVars(bio70_CA_45, nClimVars = 6)
-bio70_CA_45
-names(bio70_CA_45) <-
-  c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
-names(bio70_CA_45)
-
-
-###GCM 2: CNRM-CM6-1
-bio70_CN_45 <-
-  list.files(
-    "./Future/RCP45/CNRM-CM6-1/ssp245/PCA",
-    pattern = ".bil$",
-    full.names = TRUE
-  )
-bio70_CN_45
-bio70_CN_45 <- raster::stack(bio70_CN_45)
-# bio70_CN_45 <-disaggregate(bio70_CN_45, fact=5, fun=mean)
-# bio70_CN_45 <-aggregate(bio70_CN_45, fact=5, fun=mean)
-# bio70_CN_45<-rescVars(bio70_CN_45, nClimVars = 6)
-bio70_CN_45
-names(bio70_CN_45) <-
-  c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
-names(bio70_CN_45)
-
-###GCM 3: MIROC-ES2L
-
-bio70_MI_45 <-
-  list.files(
-    "./Future/RCP45/MIROC-ES2L/ssp245/PCA",
-    pattern = ".bil$",
-    full.names = TRUE
-  )
-bio70_MI_45
-bio70_MI_45 <- raster::stack(bio70_MI_45)
-# bio70_MI_45 <-disaggregate(bio70_MI_45, fact=5, fun=mean)
-# bio70_MI_45 <-aggregate(bio70_MI_45, fact=5, fun=mean)
-# bio70_MI_45<-rescVars(bio70_MI_45, nClimVars = 6)
-bio70_MI_45
-names(bio70_MI_45) <-
-  c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
-names(bio70_MI_45)
-
-# Loading raster layer with future projections 85 ###
-#------------------------------------------------#
-###GCM 1: CanESM5
-
-bio70_CA_85 <-
-  list.files(
-    "./Future/RCP85/CanESM5/ssp585/PCA",
-    pattern = ".bil$",
-    full.names = TRUE
-  )
-bio70_CA_85
-bio70_CA_85 <- raster::stack(bio70_CA_85)
-# bio70_CA_85 <-disaggregate(bio70_CA_85, fact=5, fun=mean)
-# bio70_CA_85 <-aggregate(bio70_CA_85, fact=5, fun=mean)
-# bio70_CA_85<-rescVars(bio70_CA_85, nClimVars = 6)
-bio70_CA_85
-names(bio70_CA_85) <-
-  c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
-names(bio70_CA_85)
-
-
-###GCM 2: CNRM-CM6-1
-bio70_CN_85 <-
-  list.files(
-    "./Future/RCP85/CNRM-CM6-1/ssp585/PCA",
-    pattern = ".bil$",
-    full.names = TRUE
-  )
-bio70_CN_85
-bio70_CN_85 <- raster::stack(bio70_CN_85)
-# bio70_CN_85 <-disaggregate(bio70_CN_85, fact=5, fun=mean)
-# bio70_CN_85 <-aggregate(bio70_CN_85, fact=5, fun=mean)
-# bio70_CN_85<-rescVars(bio70_CN_85, nClimVars = 6)
-bio70_CN_85
-names(bio70_CN_85) <-
-  c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
-names(bio70_CN_85)
-
-###GCM 3: MIROC-ES2L
-
-bio70_MI_85 <-
-  list.files(
-    "./Future/RCP85/MIROC-ES2L/ssp585/PCA",
-    pattern = ".bil$",
-    full.names = TRUE
-  )
-bio70_MI_85
-bio70_MI_85 <- raster::stack(bio70_MI_85)
-# bio70_MI_85 <-disaggregate(bio70_MI_85, fact=5, fun=mean)
-# bio70_MI_85 <-aggregate(bio70_MI_85, fact=5, fun=mean)
-# bio70_MI_85<-rescVars(bio70_MI_85, nClimVars = 6)
-bio70_MI_85
-names(bio70_MI_85) <-
-  c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
-names(bio70_MI_85)
-
-scenario.list.45 <- list(
-  bio70_CA_45,
-  bio70_CN_45,
-  bio70_MI_45
-)
-
-scenario.list.85 <- list(
-  bio70_CA_85,
-  bio70_CN_85,
-  bio70_MI_85
-)
-
-rm( bio70_CA_45,
-    bio70_CN_45,
-    bio70_MI_45,
-    bio70_CA_85,
-    bio70_CN_85,
-    bio70_MI_85)
-
-##### Occurrences ####
+## Occurrences ####
 # Select you species data matrix # 
-spp <- read.table(file.choose(), header = T, sep = ',')  
+spp <- read.csv("./Araucaria-ok.csv", header = T)  
 
 # plot all your occurence points #
 # plot(bio.crop[[1]]) 
-# points(spp[,c("lon","lat")], pch = 19)
+ # points(spp[,c("lon","lat")], pch = 19, col = "red") # adiciona pontos de ocorrencia no mapa
 
 
-dim(spp)
-head(spp, 10)
+dim(spp) # mostra numero de linha e colunas da matriz
+head(spp, 10) # olhar o cabecario da matriz
 
-table(spp$sp)
+table(spp$sp) # checando o numero de especies
 
-especies <- unique(spp$sp)
+especies <- unique(spp$sp) # cria objeto com os nomes das especies
 especies
 
 
@@ -432,8 +360,8 @@ vars <- unique(var$varia)
 
 # Pseudo-absence Set
 
-PAs <- 5
-RUNs = 5
+PAs <- 5 # numero de conjuntos de pseudo-ausencias
+RUNs = 5 # numero de repeticoes
 
 GCM45s <- c("bio70_CA_45", "bio70_CN_45", "bio70_MI_45")
 GCM85s <- c("bio70_CA_85", "bio70_CN_85", "bio70_MI_85")
@@ -443,18 +371,18 @@ GCM85s <- c("bio70_CA_85", "bio70_CN_85", "bio70_MI_85")
 VarImport = FALSE
 
 # especie = especies[1]
-#### Species Loop ####
+## Species Loop ####
 # For sequential loop (One species) ###
 # for (especie in especies[2:3]) {
 
-## For species in parallel ###
+## For species in parallel ### 
 foreach(especie = especies, # For parallel looping (Multiple Species)
-        .packages = c("raster", "biomod2",'sp',"sdmvspecies", "filesstrings",
+        .packages = c("terra",'sp',"sdmvspecies", "filesstrings",
                       "rgdal","maps","mnormt","kernlab","dismo","doParallel",
                       "stats","rJava","randomForest","nnet","psych", "earth"),
         .verbose = F,
         .errorhandling = "stop") %dopar% {
-          
+          # criando pasta de outputs temporarios #
           if (dir.exists(paste0("./temp_output/",especie,"/")) == F) {
             dir.create(paste0("./temp_output/"))
             dir.create(paste0("./temp_output/",especie,"/"))
@@ -463,43 +391,161 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ini1 = Sys.time()
           print(paste0("Starting", " ", especie, " " ,"modeling"))
           
-          # Creating empty objects to store results ###
+          ##### Loading variaveis ####
+          
+          bio.crop<-
+            list.files(
+              "./vars/Present/PCA",  pattern = ".grd$",
+              full.names = TRUE
+            )
+          bio.crop <- terra::rast(bio.crop) # para rodar somente com dados de clima substituir "bio.crop" por "bio.crop[-c(7,8)]"
+          names(bio.crop)<- c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8") # quando rodar apenas com clima remover o trecho (, "PCA7", "PCA8") dessa linha 
+          names(bio.crop)
+          
+          #--------------------------------------------------#
+          ####      LOADING FUTURE VARIABLES             ####
+          #------------------------------------------------#
+          ###GCM 1: CanESM5
+          
+          bio70_CA_45 <-
+            list.files(
+              "./vars/Future/CanESM5/ssp245/PCA",
+              pattern = ".grd$",
+              full.names = TRUE
+            )
+          bio70_CA_45 <- terra::rast(bio70_CA_45)
+          names(bio70_CA_45) <-
+            c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
+          names(bio70_CA_45)
+          
+          
+          ###GCM 2: CNRM-CM6-1
+          bio70_CN_45 <-
+            list.files(
+              "./vars/Future/CNRM-CM6-1/ssp245/PCA",
+              pattern = ".grd$",
+              full.names = TRUE
+            )
+          bio70_CN_45 <- terra::rast(bio70_CN_45)
+          names(bio70_CN_45) <-
+            c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
+          names(bio70_CN_45)
+          
+          ###GCM 3: MIROC-ES2L
+          
+          bio70_MI_45 <-
+            list.files(
+              "./vars/Future/MIROC-ES2L/ssp245/PCA",
+              pattern = ".grd$",
+              full.names = TRUE
+            )
+          bio70_MI_45 <- terra::rast(bio70_MI_45)
+          names(bio70_MI_45) <-
+            c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
+          names(bio70_MI_45)
+          
+          # Loading raster layer with future projections 85 ###
+          #------------------------------------------------#
+          
+          ###GCM 1: CanESM5
+          bio70_CA_85 <-
+            list.files(
+              "./vars/Future/CanESM5/ssp585/PCA",
+              pattern = ".grd$",
+              full.names = TRUE
+            )
+          bio70_CA_85 <- terra::rast(bio70_CA_85)
+          names(bio70_CA_85) <-
+            c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
+          names(bio70_CA_85)
+          
+          
+          ###GCM 2: CNRM-CM6-1
+          bio70_CN_85 <-
+            list.files(
+              "./vars/Future/CNRM-CM6-1/ssp585/PCA",
+              pattern = ".grd$",
+              full.names = TRUE
+            )
+          bio70_CN_85 <- terra::rast(bio70_CN_85)
+          names(bio70_CN_85) <-
+            c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
+          names(bio70_CN_85)
+          
+          ###GCM 3: MIROC-ES2L
+          bio70_MI_85 <-
+            list.files(
+              "./vars/Future/MIROC-ES2L/ssp585/PCA",
+              pattern = ".grd$",
+              full.names = TRUE
+            )
+          bio70_MI_85 <- terra::rast(bio70_MI_85)
+          names(bio70_MI_85) <-
+            c("PCA1", "PCA2", "PCA3","PCA4", "PCA5","PCA6", "PCA7", "PCA8")
+          names(bio70_MI_85)
+          
+          scenario.list.45 <- list(
+            bio70_CA_45,
+            bio70_CN_45,
+            bio70_MI_45
+          )
+          
+          scenario.list.85 <- list(
+            bio70_CA_85,
+            bio70_CN_85,
+            bio70_MI_85
+          )
+          # remover objetos desnecessarios #
+          rm( bio70_CA_45,
+              bio70_CN_45,
+              bio70_MI_45,
+              bio70_CA_85,
+              bio70_CN_85,
+              bio70_MI_85)
+          
+          
+          # Creating empty objects to store evaluation models ###
           bioclim.e <-
-            domain.e <-
+            # domain.e <-
             enfa.e <-
-            glm.e <- gam.e <- mars.e <- maxent.e <- nnet.e <- svm.e <- rf.e <- NULL
+            glm.e <- mars.e <- maxent.e <- nnet.e <- svm.e <- rf.e <- NULL
           
+          ### Checagem das coordenadas ###
+          occs <- spp[spp$sp == especie, c("lon", "lat")] # selecionar apenas lon e lat
           
-          occs <- spp[spp$sp == especie, c("lon", "lat")]
+          # Data checking and preparation
+          ocor.val <- terra::extract(bio.crop, occs, cells = T)
           
-          # Data checking and prepation
-          ocor.val <- raster::extract(bio.crop, occs, cellnumbers = T)
+          sum(is.na(ocor.val[, 1])) # retorna o numero de linhas que contem NA
           
-          sum(is.na(ocor.val[, 1]))
+          # plot(bio.crop[[1]], colNA = "red")
           
-          # plot(predictors[[1]], colNA = "red")
+          # points(occs, pch = 19, cex = 0.5)
           
-          # points(ocor.all[, -1], pch = 19, cex = 0.5)
+          ocor.val <- cbind(occs, ocor.val) # unir coordenadas com a matriz de dados
           
-          ocor.val <- cbind(occs, ocor.val)
+          ocor.val <- na.omit(ocor.val) # exclui linhas com NA
           
-          ocor.val <- na.omit(ocor.val)
+          id <- duplicated(ocor.val[, "cell"]) # Checking dumplicate points
           
-          id <- duplicated(ocor.val[, "cells"]) # Checking dumplicate points
-          
-          sum(id == T)
+          sum(id == T) # somar o numero de duplicatas
           
           ocor <-
             ocor.val[id == F, c("lon", "lat")] # Removing duplicate points
           
+          # Salvando matriz com pontos espacialmente unicos #
+          
+          unique_points <- data.frame(sp = especie, ocor)
+          write.csv(unique_points, paste0(especie, "_spatial_uniqe.csv"),
+                    row.names = F)
           #------------------------------------------#
           #           SELECT PAs                  ###
           #----------------------------------------#
-          
+          # computando distancias para limitar o buffer de amostragem das pseudo-ausencias #
           try({
             coord1 = ocor
             sp::coordinates(coord1) <- ~ lon + lat
-            raster::crs(coord1) <- raster::crs(bio.crop)
+            terra::crs(coord1) <- terra::crs(bio.crop)
             
             dist.mean <- mean(sp::spDists(
               x = coord1,
@@ -524,7 +570,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           })
           
           PA.number <- nrow(ocor)
-          PA.number #nÃºmero de pontos de ocorrÃªncia espacialmente Ãºnicos
+          PA.number #numero de pontos de ocorrencia espacialmente unicos
           
           diretorio = paste0("Occurrence.", especie)
           
@@ -532,20 +578,20 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             mars.var.All <- maxent.var.All <- svm.var.All <- 
             nnet.var.All <- rf.var.All <- NULL
           
-          # Loop PAs ####
+          #### Loop PAs ####
           for (PA in seq(PAs)) {
             
             p = rep(1, times = nrow(ocor))
-            # Preparando
+            # gerar pseudo-ausencias 
             invisible(capture.output(sel.PA <- biomod2::BIOMOD_FormatingData(
               resp.var = p,
-              expl.var = raster::stack(bio.crop),
+              expl.var = bio.crop,
               resp.xy = ocor,
               resp.name = diretorio,
               PA.nb.rep = 1,
-              #nÃºmero de datasets de pseudoausÃªncias
+              #numero de datasets de pseudo-ausencias
               PA.nb.absences = PA.number,
-              #= nÃºmero de pseudoausÃªncias = nÃºmero de pontos espacialmente Ãºnicos
+              #= numero de pseudo-ausencias = numero de pontos espacialmente unicos
               PA.strategy = "disk",
               PA.dist.min = dist.min * 1000,
               PA.dist.max = dist.mean * 1000,
@@ -556,10 +602,10 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             
             
             pa <- sel.PA@coord[li.p,]
-            
+            # gerar o background #
             invisible(capture.output(sel.back <- biomod2::BIOMOD_FormatingData(
               resp.var = p,
-              expl.var = raster::stack(bio.crop),
+              expl.var = bio.crop,
               resp.xy = ocor,
               resp.name = diretorio,
               PA.nb.rep = 1,
@@ -578,9 +624,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             
             rm(sel.back, sel.PA)
             # set.seed(0)
-            areaToral <- nrow(rasterToPoints(bio.crop))
+            areaToral <- nrow(terra::as.data.frame(bio.crop))
             
-            # Loop RUN ####
+            #### Loop RUN ####
             for (RUN in seq(RUNs)) {
               print(paste0(especie," ","PASet", PA," ","RUN", RUN))
               # Separating test/ training data
@@ -589,20 +635,21 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               id.training.pa <-
                 sample(1:nrow(ocor), round(0.7 * nrow(ocor), 0)) # prepare data 70/30
               
-              id.training.b <-
-                sample(1:nrow(back), round(0.7 * nrow(back), 0)) # prepare data 70/30
               
-              training.b <-
+              
+              # preparando dados de treino #
+              training.b <- # preparando dados para modelar com background
                 na.omit(dismo::prepareData(bio.crop, p = ocor[id.training.pa, ], 
-                                           b = back[id.training.b,], xy = T))
+                                           b = back, xy = T)[,-4])
               # head(training.b)
               # tail(training.b)
-              training.pa <-
+              training.pa <- # preparando dados para modelar com pseudo-ausencias
                 na.omit(dismo::prepareData(bio.crop, p = ocor[id.training.pa, ], 
-                                           b = pa[id.training.pa, ], xy = T))
+                                           b = pa[id.training.pa, ], xy = T)[,-4])
+              # preparando dados de teste # 
               test.pa <-
                 na.omit(dismo::prepareData(bio.crop, p = ocor[-id.training.pa, ], 
-                                           b = pa[-id.training.pa, ], xy = T))
+                                           b = pa[-id.training.pa, ], xy = T)[,-4])
               # test.back <-
               #   na.omit(dismo::prepareData(bio.crop, p = ocor[-id.training.pa, ], 
               #                              b = back[-id.training.b, ], xy = T))
@@ -623,7 +670,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             
               # Current #
               bioclim_Cur <-
-                raster::predict(bio.crop, bioclim_model)
+                terra::predict(bio.crop, 
+                               bioclim_model)
               
               # Future 45 #
               bioclim_Fut.45 <- preFut(rast = scenario.list.45,
@@ -633,12 +681,12 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               bioclim_Fut.85 = preFut(rast = scenario.list.85,
                                       model =  bioclim_model, GCM = GCM85s)
               
-              
+              # padronizando projecoes # 
               bioclim_std = rescMod(bioclim_Cur, bioclim_Fut.45, bioclim_Fut.85)
-              
+              # renomeando os mapas #
               names(bioclim_std)<-c(paste0("Cur", ".",PA, ".", RUN), paste0("Fut.45", ".",PA, ".", RUN),
                                     paste0("Fut.85", ".",PA, ".", RUN))
-              
+              # salvando resultados temporarios #
               bioclim_Cur <- subset(bioclim_std, grep(
                 "Cur", names(bioclim_std)))
               writeRaster(
@@ -665,21 +713,21 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 overwrite = T)
               
               # Evaluating ###
-              
+              # avaliou o modelo utilizando multiplos limiares/thresholds
               bioclim_eval <-
                 eval.All.Model(subset(bioclim_std, grep("Cur", names(bioclim_std))), 
                                test.pa)
-              
+              # escolhendo o limiar/threshold que maximiza acertos especificidade e sensibilidade
               bioclim_th.spec_sens <-
                 dismo::threshold(bioclim_eval, "spec_sens")
               
               # bioclim_th.LPT5 <-
-              #   quantile(raster::extract(bioclim_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(bioclim_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # 
               # bioclim_th.VDl <-
               #   com.vdl(bioclim_Cur, test.pa, bioclim_eval)@maxVDl
               
-              
+              # cumputa valores das metricas para o limiar/threshold selecionado
               bioclim_eval.spec_sens <-
                 eval.All.Model(subset(bioclim_std, grep("Cur", names(bioclim_std))), test.pa,
                                tr = bioclim_th.spec_sens)
@@ -759,7 +807,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                       dismo::bioclim(x = bio.crop[[-(rmo)]] ,
                                      p = training.pa[training.pa[, "pb"] == 1,c(1:2)])
                     
-                    bioclim_VarImp1 <-(raster::predict(object = bio.crop[[-rmo]], 
+                    bioclim_VarImp1 <-(terra::predict(object = bio.crop[[-rmo]], 
                                                        model = bioclim_mod))
                     
                     bioclim_VarImp1 = rescMod.One(bioclim_VarImp1)
@@ -812,7 +860,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               
               gc(reset = TRUE, full = T)
               
-              # ##### Domain  ####
+               ##### Domain  ####
               # print(paste0(especie, " ","Domain"," ",  "PA",  PA," ","RUN", RUN))
               # 
               # domain_model <-
@@ -823,7 +871,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               # 
               # # Current #
               # domain_Cur <-
-              #   raster::predict(bio.crop, domain_model)
+              #   terra::predict(bio.crop, domain_model)
               # 
               # # Furure 45 #
               # domain_Fut.45 <- preFut(rast = scenario.list.45,
@@ -875,7 +923,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               #   dismo::threshold(domain_eval, "spec_sens")
               # 
               # # domain_th.LPT5 <-
-              # #   quantile(raster::extract(domain_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              # #   quantile(terra::extract(domain_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # #
               # # domain_th.VDl <-
               # #   com.vdl(domain_Cur, test.pa, domain_eval)@maxVDl
@@ -964,7 +1012,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               #       dismo::domain(x = bio.crop[[-(rmo)]] ,
               #                     p = training.pa[training.pa[, "pb"] == 1,c(1:2)])
               #     
-              #     domain_VarImp1 <-(raster::predict(object = bio.crop[[-rmo]], 
+              #     domain_VarImp1 <-(terra::predict(object = bio.crop[[-rmo]], 
               #                                       model = domain_mod))
               #     
               #     
@@ -1019,16 +1067,16 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               ##### ENFA  #### 
               print(paste0(especie, " ","ENFA"," ", "PA",  PA," ","RUN", RUN))
               
-              climaPres <- raster::stack(bio.crop)
+              climaPres <- (bio.crop)
               # names(climaPres)# <- paste0("PC",1:6)
               
-              climaPres.values <- raster::values(climaPres)
-              climaPres.spdf <- na.omit(data.frame(xyFromCell(climaPres, 1:ncell(climaPres)), 
+              climaPres.values <- terra::values(climaPres) # obtendo os valores das PCAs
+              climaPres.spdf <- na.omit(data.frame(terra::xyFromCell(climaPres, 1:ncell(climaPres)), 
                                                    climaPres.values))
               
               suppressWarnings(gridded(climaPres.spdf) <- ~x+y)
-              climaPres <- raster::stack(climaPres.spdf)
-              climaPres.values <- raster::values(climaPres)
+              climaPres <- rast(climaPres.spdf)
+              climaPres.values <- terra::values(climaPres)
               media.climaPres <- apply(slot(climaPres.spdf, "data"), 2, mean)
               sd.climaPres <- apply(slot(climaPres.spdf, "data"), 2, sd)
               climaPres.scale<- sweep(slot(climaPres.spdf, "data"),2, media.climaPres)
@@ -1036,9 +1084,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               
               #adjustment of the ENFA model
               
-              pr.cell <- raster::extract(climaPres, training.pa[training.pa[,"pb"]==1,1:2], cellnumber=T)
+              pr.cell <- terra::extract(climaPres, training.pa[training.pa[,"pb"]==1,1:2], cells=T, ID = F)
               pr <- data.frame(pr= rep(0, ncell(climaPres)), climaPres.values)
-              pr[pr.cell[,"cells"], 1] <- 1
+              pr[pr.cell[,"cell"], 1] <- 1
               pr <- na.omit(pr)
               pr <- pr[,1]
               enfa_model <- adehabitatHS::madifa(ade4::dudi.pca(climaPres.scale, 
@@ -1096,7 +1144,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 dismo::threshold(enfa_eval, "spec_sens")
               
               # enfa_th.LPT5 <-
-              #   quantile(raster::extract(enfa_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(enfa_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # 
               # enfa_th.VDl <-
               #   com.vdl(enfa_Cur, test.pa, enfa_eval)@maxVDl
@@ -1179,10 +1227,10 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                     rmo = as.integer(subset(var, varia == vars[vari], select = pos)[[1]])
                     
                     
-                    enfa_climaPr <- raster::stack(bio.crop[[-rmo]])
+                    enfa_climaPr <- terra::c(bio.crop[[-rmo]])
                     names(enfa_climaPr)# <- paste0("PC",1:6)
                     
-                    enfa_climaPr.values <- raster::values(enfa_climaPr)
+                    enfa_climaPr.values <- terra::values(enfa_climaPr)
                     enfa_climaPr.spdf <-
                       na.omit(data.frame(xyFromCell(enfa_climaPr, 1:ncell(enfa_climaPr)), 
                                          enfa_climaPr.values))
@@ -1192,8 +1240,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                     
                     suppressWarnings(gridded(enfa_climaPr.spdf)<-~x+y)
                     
-                    enfa_climaPr <- raster::stack(enfa_climaPr.spdf)
-                    enfa_climaPr.values <- raster::values(enfa_climaPr)
+                    enfa_climaPr <- terra::c(enfa_climaPr.spdf)
+                    enfa_climaPr.values <- terra::values(enfa_climaPr)
                     media.enfa_climaPr <- apply(slot(enfa_climaPr.spdf, "data"), 2, mean)
                     sd.enfa_climaPr <- apply(slot(enfa_climaPr.spdf, "data"), 2, sd)
                     enfa_climaPr.scale<- sweep(slot(enfa_climaPr.spdf, "data"),2, 
@@ -1201,10 +1249,10 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                     enfa_climaPr.scale <-
                       as.matrix(enfa_climaPr.scale) %*% diag(1 / sd.enfa_climaPr)
                     
-                    enfa_pr.cel <- raster::extract(enfa_climaPr, ocor, cellnumber=T)
+                    enfa_pr.cel <- terra::extract(enfa_climaPr, ocor, cells=T)
                     enfa_pr1 <-
                       data.frame(enfa_pr1 = rep(0, ncell(enfa_climaPr)), enfa_climaPr.values)
-                    enfa_pr1[enfa_pr.cel[,"cells"], 1] <- 1
+                    enfa_pr1[enfa_pr.cel[,"cell"], 1] <- 1
                     enfa_pr1 <- na.omit(enfa_pr1)
                     enfa_pr1 <- enfa_pr1[,1]
                     
@@ -1292,7 +1340,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               
               # Current #
               glm_Cur <-
-                raster::predict(bio.crop, glm_model)
+                terra::predict(bio.crop, glm_model)
               
               # Furure 45 #
               glm_Fut.45 <- preFut(rast = scenario.list.45,
@@ -1342,7 +1390,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 dismo::threshold(glm_eval, "spec_sens")
               
               # glm_th.LPT5 <-
-              #   quantile(raster::extract(glm_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(glm_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # 
               # glm_th.VDl <-
               #   com.vdl(glm_Cur, test.pa, glm_eval)@maxVDl
@@ -1440,9 +1488,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                         trace = FALSE
                       )
                     )
-                    glm_PCA <- raster::stack(bio.crop[[-rmo]])
+                    glm_PCA <- terra::c(bio.crop[[-rmo]])
                     
-                    glm_VarImp1 <-rescMod.One(raster::predict(glm_PCA, glm_mod))
+                    glm_VarImp1 <-rescMod.One(terra::predict(glm_PCA, glm_mod))
                     
                     
                     glm_obs <-
@@ -1494,9 +1542,11 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               ##### MARS ####
               print(paste0(especie, " ","MARS"," ", "PA",  PA," ","RUN", RUN))
               
+              pb <- training.pa$pb
+              
               mars_model <- earth::earth(
                 pb ~ .,
-                data = training.pa[,-c(1:2)],
+                data = training.pa[,-c(1:3)],
                 # type = 'simple',
                 # interaction.level = 0,
                 penalty = 1,
@@ -1508,7 +1558,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               
               # Current #
               mars_Cur <-
-                raster::predict(bio.crop, mars_model)
+                terra::predict(bio.crop, mars_model)
               
               # Furure 45 #
               mars_Fut.45 <- preFut(rast = scenario.list.45,
@@ -1558,7 +1608,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 dismo::threshold(mars_eval, "spec_sens")
               
               # mars_th.LPT5 <-
-              #   quantile(raster::extract(mars_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(mars_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # 
               # mars_th.VDl <-
               #   com.vdl(mars_Cur, test.pa, mars_eval)@maxVDl
@@ -1651,9 +1701,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                       nprune = NULL,
                       pmethod = 'backward'
                     )
-                    mars_PCA <- raster::stack(bio.crop[[-rmo]])
+                    mars_PCA <- terra::c(bio.crop[[-rmo]])
                     
-                    mars_VarImp1 <-rescMod.One(raster::predict(mars_PCA, mars_mod))
+                    mars_VarImp1 <-rescMod.One(terra::predict(mars_PCA, mars_mod))
                     
                     
                     mars_obs <-
@@ -1726,13 +1776,14 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 beta_lqp = -1,
                 beta_hinge = -1,
                 betamultiplier = 1,
-                defaultprevalence = 0.5
+                defaultprevalence = 0.5,
+                na.rm = TRUE
               ))
               # Building Preojections ###
               
               # Current #
               maxent_Cur <-
-                quiet(raster::predict(bio.crop, maxent_model))
+                quiet(terra::predict(bio.crop, maxent_model, na.rm = T))
               
               
               # Furure 45 #
@@ -1783,7 +1834,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 dismo::threshold(maxent_eval, "spec_sens")
               
               # maxent_th.LPT5 <-
-              #   quantile(raster::extract(maxent_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(maxent_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # 
               # maxent_th.VDl <-
               #   com.vdl(maxent_Cur, test.pa, maxent_eval)@maxVDl
@@ -1888,9 +1939,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                       betamultiplier = 1,
                       defaultprevalence = 0.5
                     ))
-                    maxent_PCA <- raster::stack(bio.crop[[-rmo]])
+                    maxent_PCA <- terra::c(bio.crop[[-rmo]])
                     
-                    maxent_VarImp1 <-quiet(rescMod.One(raster::predict(maxent_PCA, 
+                    maxent_VarImp1 <-quiet(rescMod.One(terra::predict(maxent_PCA, 
                                                                        maxent_mod)))
                     
                     
@@ -1941,7 +1992,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               gc(reset = TRUE, full = T)
               
               
-              # ##### SVM ####
+              ##### SVM ####
               print(paste0(especie, " ","SVM"," ",  "PA",  PA," ","RUN", RUN))
               
               svm_model <- ksvm(pb ~ ., data = training.b[,-c(1:2)])
@@ -1950,7 +2001,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               
               # Current #
               svm_Cur <-
-                raster::predict(bio.crop, svm_model)
+                terra::predict(bio.crop, svm_model, na.rm = T)
               
               
               # Furure 45 #
@@ -2001,7 +2052,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 dismo::threshold(svm_eval, "spec_sens")
               
               # svm_th.LPT5 <-
-              #   quantile(raster::extract(svm_Cur, ocor[id.training.b,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(svm_Cur, ocor[id.training.b,]), 0.05, na.rm = T)
               # 
               # svm_th.VDl <-
               #   com.vdl(svm_Cur, test.pa, svm_eval)@maxVDl
@@ -2089,9 +2140,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                     
                     svm_mod <-  kernlab::ksvm( pb ~ ., data = svmTraining[, -rp])
                     
-                    svm_PCA <- raster::stack(bio.crop[[-rmo]])
+                    svm_PCA <- terra::c(bio.crop[[-rmo]])
                     
-                    svm_VarImp1 <-(rescMod.One(raster::predict(svm_PCA,
+                    svm_VarImp1 <-(rescMod.One(terra::predict(svm_PCA,
                                                                     svm_mod)))
                     
                     
@@ -2160,7 +2211,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               
               # Current #
               nnet_Cur <-
-                raster::predict(bio.crop, nnet_model)
+                terra::predict(bio.crop, nnet_model, na.rm = T)
               
               
               # Furure 45 #
@@ -2211,7 +2262,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 dismo::threshold(nnet_eval, "spec_sens")
               
               # nnet_th.LPT5 <-
-              #   quantile(raster::extract(nnet_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(nnet_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # 
               # nnet_th.VDl <-
               #   com.vdl(nnet_Cur, test.pa, nnet_eval)@maxVDl
@@ -2305,9 +2356,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                         trace = F
                       )
                     
-                    nnet_PCA <- raster::stack(bio.crop[[-rmo]])
+                    nnet_PCA <- terra::c(bio.crop[[-rmo]])
                     
-                    nnet_VarImp1 <-(rescMod.One(raster::predict(nnet_PCA, 
+                    nnet_VarImp1 <-(rescMod.One(terra::predict(nnet_PCA, 
                                                                      nnet_mod)))
                     
                     
@@ -2358,7 +2409,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               gc(reset = TRUE, full = T)
               
               
-              # ##### Random Forest ####
+              ##### Random Forest ####
               print(paste0(especie, " ","Random Forest"," ", "PA",  PA," ","RUN", RUN))
               
               suppressWarnings(rf_model <-
@@ -2372,7 +2423,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
               
               # Current #
               rf_Cur <-
-                raster::predict(bio.crop, rf_model)
+                terra::predict(bio.crop, rf_model, na.rm = T)
               
               
               # Furure 45 #
@@ -2423,7 +2474,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                 dismo::threshold(rf_eval, "spec_sens")
               
               # rf_th.LPT5 <-
-              #   quantile(raster::extract(rf_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
+              #   quantile(terra::extract(rf_Cur, ocor[id.training.pa,]), 0.05, na.rm = T)
               # 
               # rf_th.VDl <-
               #   com.vdl(rf_Cur, test.pa, rf_eval)@maxVDl
@@ -2513,9 +2564,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
                                          nodesize = 5, importance = T
                                        ))
                     
-                    rf_PCA <- raster::stack(bio.crop[[-rmo]])
+                    rf_PCA <- terra::c(bio.crop[[-rmo]])
                     
-                    rf_VarImp1 <-(rescMod.One(raster::predict(rf_PCA, 
+                    rf_VarImp1 <-(rescMod.One(terra::predict(rf_PCA, 
                                                                    rf_mod)))
                     
                     
@@ -2572,9 +2623,9 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           gc(reset = TRUE, full = TRUE)
           
          
-          #### Writing All Reults ####
+          ## Writing All Reults ####
           
-          ##### save VarImpor ####
+          ## save VarImpor ####
           if(VarImport == T){
             
             varImport = rbind(
@@ -2608,7 +2659,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           
           
           
-          # Writing Evaluation Resultes #
+          # Writing Evaluation Results #
           {
             # bioclim #
             bioclim_e = read.table(paste0("./temp_output/",especie,"/", "bioclim_eval.all.csv"), 
@@ -2645,7 +2696,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             # rf #
             rf_e = read.table(paste0("./temp_output/",especie,"/", "rf_eval.all.csv"), 
                               header = T, sep = ',')
-            
+            # unindo matrizes de avaliacao #
             Evaluation.all <- rbind(bioclim_e, enfa_e,  glm_e, mars_e, maxent_e, svm_e, nnet_e, rf_e)
             
             rm(bioclim_e, enfa_e,  glm_e, mars_e, maxent_e, svm_e, nnet_e, rf_e)  
@@ -2677,225 +2728,250 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             gc(reset = TRUE, full = TRUE)
           }
           ## Write Rasters ##
-          {
+          # {
             # Current ####
             # bioclim ###
-            bioclim.cur = stack()
+            bioclim.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                bioclim.cur = stack(bioclim.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                                  paste0('bioclim_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                                  full.names = T)))}}
-            names(bioclim.cur) <- paste0("bioclim.cur.", 1:nlayers(bioclim.cur))
+                bioclim.cur = c(bioclim.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                         paste0('bioclim_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                         full.names = T)))
+              }}
+            bioclim.cur = rast(bioclim.cur)
+            names(bioclim.cur) <- paste0("bioclim.cur.", 1:nlyr(bioclim.cur))
             
             # # domain ###
-            # domain.cur = stack()
+            # domain.cur = c()
             # for(PA in 1:PAs){
             #   for (RUN in 1:RUNs) {
-            #     domain.cur = stack(domain.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-            #                                                     paste0('domain_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-            #                                                     full.names = T)))}}
-            # names(domain.cur) <- paste0("domain.cur.", 1:nlayers(domain.cur))
+            #     domain.cur = c(domain.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+            #                                            paste0('domain_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+            #                                            full.names = T)))
+            #   }}
+            # domain.cur = rast(domain.cur)
+            # names(domain.cur) <- paste0("domain.cur.", 1:nlyr(domain.cur))
             
             # enfa ###
-            enfa.cur = stack()
+            enfa.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                enfa.cur = stack(enfa.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                            paste0('enfa_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                            full.names = T)))}}
-            names(enfa.cur) <- paste0("enfa.cur.", 1:nlayers(enfa.cur))
+                enfa.cur = c(enfa.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                   paste0('enfa_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                   full.names = T)))
+              }}
+            enfa.cur = rast(enfa.cur)
+            names(enfa.cur) <- paste0("enfa.cur.", 1:nlyr(enfa.cur))
             
             # glm ###
-            glm.cur = stack()
+            glm.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                glm.cur = stack(glm.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                          paste0('glm_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                          full.names = T)))}}
-            names(glm.cur) <- paste0("glm.cur.", 1:nlayers(glm.cur))
+                glm.cur = c(glm.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                 paste0('glm_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                 full.names = T)))
+              }}
+            glm.cur = rast(glm.cur)
+            names(glm.cur) <- paste0("glm.cur.", 1:nlyr(glm.cur))
             
             # mars ###
-            mars.cur = stack()
+            mars.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                mars.cur = stack(mars.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                            paste0('mars_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                            full.names = T)))}}
-            names(mars.cur) <- paste0("mars.cur.", 1:nlayers(mars.cur))
+                mars.cur = c(mars.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                   paste0('mars_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                   full.names = T)))
+              }}
+            mars.cur = rast(mars.cur)
+            names(mars.cur) <- paste0("mars.cur.", 1:nlyr(mars.cur))
             
             # maxent ###
-            maxent.cur = stack()
+            maxent.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                maxent.cur = stack(maxent.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                                paste0('maxent_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                                full.names = T)))}}
-            names(maxent.cur) <- paste0("maxent.cur.", 1:nlayers(maxent.cur))
+                maxent.cur = c(maxent.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                       paste0('maxent_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                       full.names = T)))
+              }}
+            maxent.cur = rast(maxent.cur)
+            names(maxent.cur) <- paste0("maxent.cur.", 1:nlyr(maxent.cur))
             
             # svm ###
-            svm.cur = stack()
+            svm.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                svm.cur = stack(svm.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                          paste0('svm_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                          full.names = T)))}}
-            names(svm.cur) <- paste0("svm.cur.", 1:nlayers(svm.cur))
+                svm.cur = c(svm.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                 paste0('svm_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                 full.names = T)))
+              }}
+            svm.cur = rast(svm.cur)
+            names(svm.cur) <- paste0("svm.cur.", 1:nlyr(svm.cur))
             
             # nnet ###
-            nnet.cur = stack()
+            nnet.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                nnet.cur = stack(nnet.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                            paste0('nnet_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                            full.names = T)))}}
-            names(nnet.cur) <- paste0("nnet.cur.", 1:nlayers(nnet.cur))
+                nnet.cur = c(nnet.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                   paste0('nnet_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                   full.names = T)))
+              }}
+            nnet.cur = rast(nnet.cur)
+            names(nnet.cur) <- paste0("nnet.cur.", 1:nlyr(nnet.cur))
             
             # rf ###
-            rf.cur = stack()
+            rf.cur = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                rf.cur = stack(rf.cur, stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                        paste0('rf_Cur',"PA_",PA,"RUN_",RUN,".grd"),
-                                                        full.names = T)))}}
-            names(rf.cur) <- paste0("rf.cur.", 1:nlayers(rf.cur))
+                rf.cur = c(rf.cur,c(list.files(paste0("./temp_output/",especie,"/"), 
+                                               paste0('rf_Cur',"PA_",PA,"RUN_",RUN,".grd$"),
+                                               full.names = T)))
+              }}
+            rf.cur = rast(rf.cur)
+            names(rf.cur) <- paste0("rf.cur.", 1:nlyr(rf.cur))
             
             # Current Ensemble ####
-            Current.all = stack(bioclim.cur, enfa.cur, glm.cur, mars.cur, 
+            Current.all = c(bioclim.cur, enfa.cur, glm.cur, mars.cur, 
                                 maxent.cur, svm.cur, nnet.cur, rf.cur)
-            gc(reset = T, full = T)
-            Current.mean <- raster::weighted.mean(subset(Current.all,
+            # fazendo a media ponderada pelo TSS #
+            Current.mean <- terra::weighted.mean(subset(Current.all,
                                         sel2[, "ID"]), sel2$TSS)
             writeRaster(
               Current.mean,
-              paste0("./outputs/", especie, "_", "Current.mean.tif"), formtat = "GTiff", overwrite = T)
+              paste0("./outputs/", especie, "_", "Current.mean.tif"), overwrite = T)
             
             # Binary Transformation #
-            Current.bin <- weighted.mean(biomod2::BinaryTransformation(subset(Current.all,
-                                                                              sel2[, "ID"]), 
-                                                                       sel2$threshold),
-                                         sel2$TSS)
-            
-            # Current.bin = stack(Current.bin == raster::maxValue(Current.bin))
+            Current.bin <- mean(subset(Current.all,
+                                                                              sel2[, "ID"]) >= 
+                                                                       sel2$threshold
+                                )
+            # Current.bin = c(Current.bin == terra::maxValue(Current.bin))
             
             rm(Current.mean, Current.all)
             gc(reset = T, full = T)
             writeRaster(
               Current.bin,
-              paste0("./outputs/", especie, "_", "Current.bin.tif"), formtat = "GTiff", overwrite = T)
+              paste0("./outputs/", especie, "_", "Current.bin.tif"), overwrite = T)
             rm(Current.bin,bioclim.cur, enfa.cur, glm.cur, mars.cur, 
                maxent.cur, svm.cur, nnet.cur, rf.cur)
-            gc(reset = TRUE, full = TRUE)}
+            gc(reset = TRUE, full = TRUE)
+            # }
           # Future 45 ####
-          {
-            # bioclim 45 ###
-            
-            bioclim.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                bioclim.fut.45 = stack(bioclim.fut.45, 
-                                       stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                        paste0('bioclim_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                        full.names = T)))}}
-            names(bioclim.fut.45) <- paste0("bioclim.fut.45.", 1:nlayers(bioclim.fut.45))
-            
-            
-            # domain 45 ###
-            # domain.fut.45 = stack()
-            # for(PA in 1:PAs){
-            #   for (RUN in 1:RUNs) {
-            #     domain.fut.45 = stack(domain.fut.45, 
-            #                           stack(list.files(paste0("./temp_output/",especie,"/"), 
-            #                                            paste0('domain_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-            #                                            full.names = T)))}}
-            # names(domain.fut.45) <- paste0("domain.fut.45.", 1:nlayers(domain.fut.45))
-            
-            # enfa 45 ###
-            
-            enfa.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                enfa.fut.45 = stack(enfa.fut.45, 
-                                    stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                     paste0('enfa_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                     full.names = T)))}}
-            names(enfa.fut.45) <- paste0("enfa.fut.45.", 1:nlayers(enfa.fut.45))
-            
-            # glm 45 ###
-            
-            glm.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                glm.fut.45 = stack(glm.fut.45, 
-                                   stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                    paste0('glm_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                    full.names = T)))}}
-            names(glm.fut.45) <- paste0("glm.fut.45.", 1:nlayers(glm.fut.45))
-            
-            # mars 45 ###
-            
-            mars.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                mars.fut.45 = stack(mars.fut.45, 
-                                    stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                     paste0('mars_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                     full.names = T)))}}
-            names(mars.fut.45) <- paste0("mars.fut.45.", 1:nlayers(mars.fut.45))
-            
-            
-            # maxent 45 ###
-            
-            maxent.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                maxent.fut.45 = stack(maxent.fut.45, 
-                                      stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                       paste0('maxent_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                       full.names = T)))}}
-            names(maxent.fut.45) <- paste0("maxent.fut.45.", 1:nlayers(maxent.fut.45))
-            
-            # svm 45 ###
-            
-            svm.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                svm.fut.45 = stack(svm.fut.45, 
-                                   stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                    paste0('svm_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                    full.names = T)))}}
-            names(svm.fut.45) <- paste0("svm.fut.45.", 1:nlayers(svm.fut.45))
-            
-            # nnet 45 ###
-            
-            nnet.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                nnet.fut.45 = stack(nnet.fut.45, 
-                                    stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                     paste0('nnet_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                     full.names = T)))}}
-            
-            names(nnet.fut.45) <- paste0("nnet.fut.45.", 1:nlayers(nnet.fut.45))
-            
-            # rf 45 ###
-            rf.fut.45 = stack()
-            for(PA in 1:PAs){
-              for (RUN in 1:RUNs) {
-                rf.fut.45 = stack(rf.fut.45, 
-                                  stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                   paste0('rf_Fut.45',"PA_",PA,"RUN_",RUN,".grd"),
-                                                   full.names = T)))}}
-            
-            names(rf.fut.45) <- paste0("rf.fut.85.", 1:nlayers(rf.fut.45))
-            
+          # {
+          # bioclim 45 ###
+          
+          bioclim.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              bioclim.fut.45 = c(bioclim.fut.45, 
+                                 c(list.files(paste0("./temp_output/",especie,"/"), 
+                                              paste0('bioclim_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                              full.names = T)))}}
+          bioclim.fut.45 = rast(bioclim.fut.45)
+          names(bioclim.fut.45) <- paste0("bioclim.fut.45.", 1:nlyr(bioclim.fut.45))
+          
+          
+          # # domain 45 ###
+          
+          # domain.fut.45 = c()
+          # for(PA in 1:PAs){
+          #   for (RUN in 1:RUNs) {
+          #     domain.fut.45 = c(domain.fut.45, 
+          #                       c(list.files(paste0("./temp_output/",especie,"/"), 
+          #                                    paste0('domain_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+          #                                    full.names = T)))}}
+          # domain.fut.45 = rast(domain.fut.45)
+          # names(domain.fut.45) <- paste0("domain.fut.45.", 1:nlyr(domain.fut.45))
+          
+          # enfa 45 ###
+          
+          enfa.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              enfa.fut.45 = c(enfa.fut.45, 
+                              c(list.files(paste0("./temp_output/",especie,"/"), 
+                                           paste0('enfa_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                           full.names = T)))}}
+          enfa.fut.45 = rast(enfa.fut.45)
+          names(enfa.fut.45) <- paste0("enfa.fut.45.", 1:nlyr(enfa.fut.45))
+          
+          # glm 45 ###
+          
+          glm.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              glm.fut.45 = c(glm.fut.45, 
+                             c(list.files(paste0("./temp_output/",especie,"/"), 
+                                          paste0('glm_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                          full.names = T)))}}
+          glm.fut.45 = rast(glm.fut.45)
+          names(glm.fut.45) <- paste0("glm.fut.45.", 1:nlyr(glm.fut.45))
+          
+          # mars 45 ###
+          
+          mars.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              mars.fut.45 = c(mars.fut.45, 
+                              c(list.files(paste0("./temp_output/",especie,"/"), 
+                                           paste0('mars_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                           full.names = T)))}}
+          mars.fut.45 = rast(mars.fut.45)
+          names(mars.fut.45) <- paste0("mars.fut.45.", 1:nlyr(mars.fut.45))
+          
+          # maxent 45 ###
+          
+          maxent.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              maxent.fut.45 = c(maxent.fut.45, 
+                                c(list.files(paste0("./temp_output/",especie,"/"), 
+                                             paste0('maxent_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                             full.names = T)))}}
+          maxent.fut.45 = rast(maxent.fut.45)
+          names(maxent.fut.45) <- paste0("maxent.fut.45.", 1:nlyr(maxent.fut.45))
+          
+          # svm 45 ###
+          
+          svm.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              svm.fut.45 = c(svm.fut.45, 
+                             c(list.files(paste0("./temp_output/",especie,"/"), 
+                                          paste0('svm_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                          full.names = T)))}}
+          svm.fut.45 = rast(svm.fut.45)
+          names(svm.fut.45) <- paste0("svm.fut.45.", 1:nlyr(svm.fut.45))
+          
+          # nnet 45 ###
+          
+          nnet.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              nnet.fut.45 = c(nnet.fut.45, 
+                              c(list.files(paste0("./temp_output/",especie,"/"), 
+                                           paste0('nnet_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                           full.names = T)))}}
+          nnet.fut.45 = rast(nnet.fut.45)
+          names(nnet.fut.45) <- paste0("nnet.fut.45.", 1:nlyr(nnet.fut.45))
+          
+          # rf 45 ###
+          
+          rf.fut.45 = c()
+          for(PA in 1:PAs){
+            for (RUN in 1:RUNs) {
+              rf.fut.45 = c(rf.fut.45, 
+                            c(list.files(paste0("./temp_output/",especie,"/"), 
+                                         paste0('rf_Fut.45',"PA_",PA,"RUN_",RUN,".grd$"),
+                                         full.names = T)))}}
+          rf.fut.45 = rast(rf.fut.45)
+          names(rf.fut.45) <- paste0("rf.fut.45.", 1:nlyr(rf.fut.45))
             
             ## Future Ensemble 45 ####
             
-            Future.45.all = stack(bioclim.fut.45,enfa.fut.45, glm.fut.45, mars.fut.45,
+            Future.45.all = c(bioclim.fut.45,enfa.fut.45, glm.fut.45, mars.fut.45,
                                   maxent.fut.45, svm.fut.45, nnet.fut.45, rf.fut.45)
             
-            Future.45.mean <- raster::weighted.mean(subset(Future.45.all, 
+            Future.45.mean <- terra::weighted.mean(subset(Future.45.all, 
                                                            sel2[, "ID"]), sel2$TSS)
             
             rm(bioclim.fut.45,enfa.fut.45, glm.fut.45, mars.fut.45,
@@ -2903,131 +2979,140 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             
             writeRaster(
               Future.45.mean,
-              paste0("./outputs/", especie, "_", "Future.45.mean.tif"), formtat = "GTiff", overwrite = T)
+              paste0("./outputs/", especie, "_", "Future.45.mean.tif"), overwrite = T)
             
             # Binary Transformation #
-            Future.45.bin <- weighted.mean(subset(Future.45.all,
-                                                  sel2[, "ID"]) >= sel2$threshold,
-                                         sel2$TSS)
+            Future.45.bin <- terra::mean(subset(Future.45.all,
+                                                  sel2[, "ID"]) >= sel2$threshold
+                                          )
             
-            # Future.45.bin = stack(Future.45.bin == raster::maxValue(Future.45.bin))
+            # Future.45.bin = c(Future.45.bin == terra::maxValue(Future.45.bin))
             
 
             writeRaster(
               Future.45.bin,
-              paste0("./outputs/", especie, "_", "Future.45.bin.tif"), formtat = "GTiff", overwrite = T)
+              paste0("./outputs/", especie, "_", "Future.45.bin.tif"), overwrite = T)
             rm(Future.45.mean, Future.45.bin, Future.45.all)
-            gc(reset = TRUE)}
+            gc(reset = TRUE)
+            # }
           
-          # Future 85 ####
-          {
+            # Future 85 ####
+            # {
             # bioclim 85 ###
             
-            bioclim.fut.85 = stack()
+            bioclim.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                bioclim.fut.85 = stack(bioclim.fut.85, 
-                                       stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                        paste0('bioclim_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                        full.names = T)))}}
-            names(bioclim.fut.85) <- paste0("bioclim.fut.85.", 1:nlayers(bioclim.fut.85))
+                bioclim.fut.85 = c(bioclim.fut.85, 
+                                   c(list.files(paste0("./temp_output/",especie,"/"), 
+                                                paste0('bioclim_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                                full.names = T)))}}
+            bioclim.fut.85 = rast(bioclim.fut.85)
+            names(bioclim.fut.85) <- paste0("bioclim.fut.85.", 1:nlyr(bioclim.fut.85))
             
-            # domain 85 ###
-            # domain.fut.85 = stack()
+            
+            # # domain 85 ###
+            
+            # domain.fut.85 = c()
             # for(PA in 1:PAs){
             #   for (RUN in 1:RUNs) {
-            #     domain.fut.85 = stack(domain.fut.85, 
-            #                           stack(list.files(paste0("./temp_output/",especie,"/"), 
-            #                                            paste0('domain_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-            #                                            full.names = T)))}}
-            # names(domain.fut.85) <- paste0("domain.fut.85.", 1:nlayers(domain.fut.85))
+            #     domain.fut.85 = c(domain.fut.85, 
+            #                       c(list.files(paste0("./temp_output/",especie,"/"), 
+            #                                    paste0('domain_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+            #                                    full.names = T)))}}
+            # domain.fut.85 = rast(domain.fut.85)
+            # names(domain.fut.85) <- paste0("domain.fut.85.", 1:nlyr(domain.fut.85))
             
             # enfa 85 ###
             
-            enfa.fut.85 = stack()
+            enfa.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                enfa.fut.85 = stack(enfa.fut.85, 
-                                    stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                     paste0('enfa_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                     full.names = T)))}}
-            names(enfa.fut.85) <- paste0("enfa.fut.85.", 1:nlayers(enfa.fut.85))
+                enfa.fut.85 = c(enfa.fut.85, 
+                                c(list.files(paste0("./temp_output/",especie,"/"), 
+                                             paste0('enfa_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                             full.names = T)))}}
+            enfa.fut.85 = rast(enfa.fut.85)
+            names(enfa.fut.85) <- paste0("enfa.fut.85.", 1:nlyr(enfa.fut.85))
             
             # glm 85 ###
             
-            glm.fut.85 = stack()
+            glm.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                glm.fut.85 = stack(glm.fut.85, 
-                                   stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                    paste0('glm_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                    full.names = T)))}}
-            names(glm.fut.85) <- paste0("glm.fut.85.", 1:nlayers(glm.fut.85))
+                glm.fut.85 = c(glm.fut.85, 
+                               c(list.files(paste0("./temp_output/",especie,"/"), 
+                                            paste0('glm_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                            full.names = T)))}}
+            glm.fut.85 = rast(glm.fut.85)
+            names(glm.fut.85) <- paste0("glm.fut.85.", 1:nlyr(glm.fut.85))
             
             # mars 85 ###
             
-            mars.fut.85 = stack()
+            mars.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                mars.fut.85 = stack(mars.fut.85, 
-                                    stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                     paste0('mars_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                     full.names = T)))}}
-            names(mars.fut.85) <- paste0("mars.fut.85.", 1:nlayers(mars.fut.85))
-            
+                mars.fut.85 = c(mars.fut.85, 
+                                c(list.files(paste0("./temp_output/",especie,"/"), 
+                                             paste0('mars_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                             full.names = T)))}}
+            mars.fut.85 = rast(mars.fut.85)
+            names(mars.fut.85) <- paste0("mars.fut.85.", 1:nlyr(mars.fut.85))
             
             # maxent 85 ###
             
-            maxent.fut.85 = stack()
+            maxent.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                maxent.fut.85 = stack(maxent.fut.85, 
-                                      stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                       paste0('maxent_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                       full.names = T)))}}
-            names(maxent.fut.85) <- paste0("maxent.fut.85.", 1:nlayers(maxent.fut.85))
+                maxent.fut.85 = c(maxent.fut.85, 
+                                  c(list.files(paste0("./temp_output/",especie,"/"), 
+                                               paste0('maxent_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                               full.names = T)))}}
+            maxent.fut.85 = rast(maxent.fut.85)
+            names(maxent.fut.85) <- paste0("maxent.fut.85.", 1:nlyr(maxent.fut.85))
             
             # svm 85 ###
             
-            svm.fut.85 = stack()
+            svm.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                svm.fut.85 = stack(svm.fut.85, 
-                                   stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                    paste0('svm_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                    full.names = T)))}}
-            names(svm.fut.85) <- paste0("svm.fut.85.", 1:nlayers(svm.fut.85))
+                svm.fut.85 = c(svm.fut.85, 
+                               c(list.files(paste0("./temp_output/",especie,"/"), 
+                                            paste0('svm_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                            full.names = T)))}}
+            svm.fut.85 = rast(svm.fut.85)
+            names(svm.fut.85) <- paste0("svm.fut.85.", 1:nlyr(svm.fut.85))
             
             # nnet 85 ###
             
-            nnet.fut.85 = stack()
+            nnet.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                nnet.fut.85 = stack(nnet.fut.85, 
-                                    stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                     paste0('nnet_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                     full.names = T)))}}
-            names(nnet.fut.85) <- paste0("nnet.fut.85.", 1:nlayers(nnet.fut.85))
+                nnet.fut.85 = c(nnet.fut.85, 
+                                c(list.files(paste0("./temp_output/",especie,"/"), 
+                                             paste0('nnet_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                             full.names = T)))}}
+            nnet.fut.85 = rast(nnet.fut.85)
+            names(nnet.fut.85) <- paste0("nnet.fut.85.", 1:nlyr(nnet.fut.85))
             
             # rf 85 ###
             
-            rf.fut.85 = stack()
+            rf.fut.85 = c()
             for(PA in 1:PAs){
               for (RUN in 1:RUNs) {
-                rf.fut.85 = stack(rf.fut.85, 
-                                  stack(list.files(paste0("./temp_output/",especie,"/"), 
-                                                   paste0('rf_Fut.85',"PA_",PA,"RUN_",RUN,".grd"),
-                                                   full.names = T)))}}
-            
-            names(rf.fut.85) <- paste0("rf.fut.85.", 1:nlayers(rf.fut.85))
-            
-            
+                rf.fut.85 = c(rf.fut.85, 
+                              c(list.files(paste0("./temp_output/",especie,"/"), 
+                                           paste0('rf_Fut.85',"PA_",PA,"RUN_",RUN,".grd$"),
+                                           full.names = T)))}}
+            rf.fut.85 = rast(rf.fut.85)
+            names(rf.fut.85) <- paste0("rf.fut.85.", 1:nlyr(rf.fut.85))
+          
             ## Future Ensemble 85 ####
             
-            Future.85.all = stack(bioclim.fut.85,enfa.fut.85, glm.fut.85, mars.fut.85,
+            Future.85.all = c(bioclim.fut.85,enfa.fut.85, glm.fut.85, mars.fut.85,
                                   maxent.fut.85, svm.fut.85, nnet.fut.85, rf.fut.85)
             
-            Future.85.mean <- raster::weighted.mean(subset(Future.85.all, 
+            Future.85.mean <- terra::weighted.mean(subset(Future.85.all, 
                                                            sel2[, "ID"]), sel2$TSS)
             
             rm(bioclim.fut.85,enfa.fut.85, glm.fut.85, mars.fut.85,
@@ -3036,24 +3121,23 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
             writeRaster(
               Future.85.mean,
               paste0("./outputs/", especie, "_", "Future.85.mean.tif"), 
-              formtat = "GTiff", overwrite = T)
+              overwrite = T)
             
             # Binary Transformation #
-            Future.85.bin <- weighted.mean(biomod2::BinaryTransformation(subset(Future.85.all,
-                                                                                sel2[, "ID"]), 
-                                                                         sel2$threshold),
-                                           sel2$TSS)
+            Future.85.bin <- terra::mean(subset(Future.85.all,
+                                                 sel2[, "ID"]) >= sel2$threshold
+            )
             
-            # Future.85.bin = stack(Future.85.bin == raster::maxValue(Future.85.bin))
+            # Future.85.bin = c(Future.85.bin == terra::maxValue(Future.85.bin))
   
             writeRaster(
               Future.85.bin,
               paste0("./outputs/", especie, "_", "Future.85.bin.tif"), 
-              formtat = "GTiff", overwrite = T)
+              overwrite = T)
             
             rm(Future.85.mean, Future.85.bin, Future.85.all)
             gc(reset = T)
-          }
+          # }
           
           
           rm(sel2)
@@ -3091,4 +3175,4 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
 
 beep(sound = 2)
 beep(sound = 2)
-base::quit(save = "yes")
+# base::quit(save = "yes")
