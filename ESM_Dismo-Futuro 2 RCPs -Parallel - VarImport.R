@@ -15,7 +15,6 @@
 
 
 ## Install and Library packages ####
-# install.packages("rgdal")
 # install.packages("sp")
 # install.packages("raster")
 # install.packages("maps")
@@ -378,7 +377,7 @@ VarImport = FALSE
 ## For species in parallel ### 
 foreach(especie = especies, # For parallel looping (Multiple Species)
         .packages = c("terra",'sp',"sdmvspecies", "filesstrings",
-                      "rgdal","maps","mnormt","kernlab","dismo","doParallel",
+                      "maps","mnormt","kernlab","dismo","doParallel",
                       "stats","rJava","randomForest","nnet","psych", "earth"),
         .verbose = F,
         .errorhandling = "stop") %dopar% {
