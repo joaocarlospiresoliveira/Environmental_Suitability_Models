@@ -394,7 +394,7 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           
           bio.crop<-
             list.files(
-              "./vars/Present/PCA",  pattern = ".grd$",
+              "./Data/vars/Present/PCA",  pattern = "bil$",
               full.names = TRUE
             )
           bio.crop <- terra::rast(bio.crop) # para rodar somente com dados de clima substituir "bio.crop" por "bio.crop[-c(7,8)]"
@@ -408,8 +408,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           
           bio70_CA_45 <-
             list.files(
-              "./vars/Future/CanESM5/ssp245/PCA",
-              pattern = ".grd$",
+              "./Data/vars/Future/RCP45/CanESM5/ssp245/PCA",
+              pattern = "bil$",
               full.names = TRUE
             )
           bio70_CA_45 <- terra::rast(bio70_CA_45)
@@ -421,8 +421,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 2: CNRM-CM6-1
           bio70_CN_45 <-
             list.files(
-              "./vars/Future/CNRM-CM6-1/ssp245/PCA",
-              pattern = ".grd$",
+              "./Data/vars/Future/RCP45/CNRM-CM6-1/ssp245/PCA",
+              pattern = "bil$",
               full.names = TRUE
             )
           bio70_CN_45 <- terra::rast(bio70_CN_45)
@@ -434,8 +434,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           
           bio70_MI_45 <-
             list.files(
-              "./vars/Future/MIROC-ES2L/ssp245/PCA",
-              pattern = ".grd$",
+              "./Data/vars/Future/RCP45/MIROC-ES2L/ssp245/PCA",
+              pattern = "bil$",
               full.names = TRUE
             )
           bio70_MI_45 <- terra::rast(bio70_MI_45)
@@ -449,8 +449,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 1: CanESM5
           bio70_CA_85 <-
             list.files(
-              "./vars/Future/CanESM5/ssp585/PCA",
-              pattern = ".grd$",
+              "./Data/vars/Future/RCP85/CanESM5/ssp585/PCA",
+              pattern = "bil$",
               full.names = TRUE
             )
           bio70_CA_85 <- terra::rast(bio70_CA_85)
@@ -462,8 +462,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 2: CNRM-CM6-1
           bio70_CN_85 <-
             list.files(
-              "./vars/Future/CNRM-CM6-1/ssp585/PCA",
-              pattern = ".grd$",
+              "./Data/vars/Future/RCP85/CNRM-CM6-1/ssp585/PCA",
+              pattern = "bil$",
               full.names = TRUE
             )
           bio70_CN_85 <- terra::rast(bio70_CN_85)
@@ -474,8 +474,8 @@ foreach(especie = especies, # For parallel looping (Multiple Species)
           ###GCM 3: MIROC-ES2L
           bio70_MI_85 <-
             list.files(
-              "./vars/Future/MIROC-ES2L/ssp585/PCA",
-              pattern = ".grd$",
+              "./Data/vars/Future/RCP85/MIROC-ES2L/ssp585/PCA",
+              pattern = "bil$",
               full.names = TRUE
             )
           bio70_MI_85 <- terra::rast(bio70_MI_85)
